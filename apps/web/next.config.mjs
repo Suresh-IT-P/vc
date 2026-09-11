@@ -33,6 +33,58 @@ if (existsSync(rootEnv)) {
   }
 }
 
+/**
+ * Refuse to inline a loopback API address into a production bundle.
+ *
+ * NEXT_PUBLIC_* is baked in at build time, so NEXT_PUBLIC_API_URL=http://localhost:4000
+ * does not mean "the API next door" — it means every visitor's browser asks *its
+ * own machine* for the API and every request dies with ERR_CONNECTION_REFUSED.
+ * The page loads, so it presents as a broken app rather than a broken config.
+ *
+ * This has shipped twice from the same path: the value lived in .env.example,
+ * which is what gets pasted into a host's variables panel. It is gone from there
+ * now, but a variable already set in a dashboard outlives any edit to this repo,
+ * and nothing downstream can detect it — the bundle is just a string by then.
+ *
+ * On a platform this is fatal, because there is no situation where it is what you
+ * meant. Locally it is only a warning: `npm run start:split` really does serve
+ * the API on another localhost port, and a production build against it is valid.
+ */
+const LOOPBACK_URL = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?/i;
+const PLATFORM_SIGNALS = [
+  'RAILWAY_PUBLIC_DOMAIN',
+  'RAILWAY_ENVIRONMENT',
+  'PUBLIC_URL',
+  'RENDER',
+  'FLY_APP_NAME',
+  'HEROKU_APP_NAME',
+  'VERCEL',
+];
+const inlinedLoopback = ['NEXT_PUBLIC_API_URL', 'NEXT_PUBLIC_SOCKET_URL'].filter(
+  (key) => process.env[key] && LOOPBACK_URL.test(process.env[key]),
+);
+
+if (inlinedLoopback.length > 0 && process.env.NODE_ENV === 'production') {
+  const found = inlinedLoopback.map((key) => `${key}=${process.env[key]}`).join(', ');
+  const explanation = [
+    `This production build would inline a loopback address into the browser bundle: ${found}`,
+    '',
+    "NEXT_PUBLIC_* is inlined at build time, so every visitor's browser would try to",
+    'reach the API on its own machine: ERR_CONNECTION_REFUSED on every request, with',
+    'the page itself loading fine.',
+    '',
+    'Unset both. The app then uses same-origin relative URLs, which is correct behind',
+    'scripts/serve.mjs or Nginx. Set them only when the API is genuinely on another',
+    'origin, and then to that origin.',
+  ].join('\n');
+  const onPlatform = PLATFORM_SIGNALS.some((key) => process.env[key]);
+  if (onPlatform) throw new Error(explanation);
+  console.warn(`
+[next.config] WARNING
+${explanation}
+`);
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
