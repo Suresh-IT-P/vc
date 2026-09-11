@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none"><defs><linearGradient id="a3" x1="0%" y1="0%" x2="50.0%" y2="86.6%">
+      <stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient></defs>
+     <rect width="256" height="256" rx="128" fill="url(#a3)"/>
+     <text x="50%" y="50%" dy="0.35em" text-anchor="middle"
+       font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+       font-size="104" font-weight="600" fill="rgba(255,255,255,0.94)"
+       letter-spacing="-2">SP</text></svg>

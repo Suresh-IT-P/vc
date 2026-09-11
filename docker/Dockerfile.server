@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# Sonder API + signalling server.
+# Multi-stage: the build stage keeps devDependencies and the Prisma CLI; the
+# runtime image carries only what is needed to serve.
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS deps
+WORKDIR /app
+# openssl is required by the Prisma query engine on Alpine.
+RUN apk add --no-cache openssl
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY apps/server/package.json apps/server/
+COPY apps/web/package.json apps/web/
+RUN npm ci --ignore-scripts=false --workspace @sonder/server --workspace @sonder/shared --include-workspace-root
+
+FROM deps AS build
+WORKDIR /app
+COPY packages/shared packages/shared
+COPY apps/server apps/server
+COPY tsconfig.base.json ./
+COPY scripts scripts
+RUN npm run build --workspace @sonder/shared \
+ && npx prisma generate --schema apps/server/prisma/schema.prisma \
+ && npm run build --workspace @sonder/server
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+RUN apk add --no-cache openssl \
+ && addgroup -S sonder && adduser -S sonder -G sonder
+ENV NODE_ENV=production
+
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/packages/shared/package.json ./packages/shared/
+COPY --from=build /app/apps/server/dist ./apps/server/dist
+COPY --from=build /app/apps/server/package.json ./apps/server/
+COPY --from=build /app/apps/server/prisma ./apps/server/prisma
+COPY --from=build /app/package.json ./
+
+# The SQLite database lives here, on a volume. Create it *before* USER so the
+# directory is owned by sonder: Docker copies an image directory's ownership into
+# a new named volume, and without this the unprivileged process cannot write the
+# database file (or the -wal/-shm files WAL mode needs beside it).
+RUN mkdir -p /data && chown sonder:sonder /data
+
+USER sonder
+EXPOSE 4000
+
+# Migrations run on start so a rolling deploy cannot serve against an old schema.
+CMD ["sh", "-c", "npx prisma migrate deploy --schema apps/server/prisma/schema.prisma && node apps/server/dist/index.js"]

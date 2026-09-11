@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080" fill="none"><defs><linearGradient id="g10" x1="0%" y1="0%" x2="-8.7%" y2="99.6%">
+      <stop offset="0%" stop-color="#0891b2"/><stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+      <clipPath id="c10"><rect width="1080" height="1080"/></clipPath></defs>
+     <rect width="1080" height="1080" fill="url(#g10)"/>
+     <g clip-path="url(#c10)"><circle cx="307" cy="53" r="316" stroke="#ffffff" stroke-width="7.2" opacity="0.121"/><circle cx="983" cy="1057" r="522" stroke="#000000" stroke-width="2.7" opacity="0.217"/><circle cx="729" cy="143" r="201" stroke="#ffffff" stroke-width="11.0" opacity="0.127"/><circle cx="535" cy="540" r="390" stroke="#000000" stroke-width="9.3" opacity="0.145"/><circle cx="283" cy="51" r="244" stroke="#ffffff" stroke-width="7.1" opacity="0.171"/><circle cx="480" cy="498" r="456" stroke="#000000" stroke-width="8.3" opacity="0.107"/><circle cx="947" cy="2" r="322" stroke="#ffffff" stroke-width="9.8" opacity="0.088"/></g></svg>

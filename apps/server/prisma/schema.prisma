@@ -1,0 +1,378 @@
+// ---------------------------------------------------------------------------
+// Sonder - database schema (SQLite)
+//
+// SQLite is the database, in development and in production. That is a deliberate
+// fit rather than a shortcut: the API already runs as a single process because
+// presence and the call registry are in-process maps (see ecosystem.config.cjs),
+// so there is no second writer for a network database to coordinate. Messaging
+// and call metadata are small, indexed, mostly-append workloads. What SQLite
+// removes is a whole tier: no server to run, no credentials, no connection pool,
+// and backups are a file copy.
+//
+// Write concurrency is the real constraint. apps/server/src/db.ts enables WAL
+// and a busy timeout at connect time, which is what makes concurrent readers and
+// a single writer behave. See docs/database.md for the limits and when to move.
+//
+// TWO SQLITE CONSEQUENCES, both visible below:
+//
+// 1. No enums. These columns are String, and their legal values are owned by
+//    @sonder/shared (packages/shared/src/types) and validated by Zod on every
+//    write — the same source the client types against, so nothing is duplicated:
+//
+//   Call.type                    AUDIO | VIDEO
+//   Call.status                  RINGING | ACCEPTED | CONNECTED | ENDED
+//   Call.endReason               COMPLETED | REJECTED | CANCELLED | BUSY | TIMEOUT | FAILED | UNAVAILABLE
+//   CallParticipant.role         CALLER | CALLEE
+//   Notification.kind            LIKE | COMMENT | FOLLOW | MENTION | CALL | MESSAGE
+//
+// 2. No native type attributes (@db.VarChar, @db.Text). SQLite stores TEXT
+//    without a declared length, so lengths are enforced by Zod at the boundary,
+//    which is where the error messages belong anyway.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================== REAL FEATURES ==============================
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  username     String  @unique
+  displayName  String
+  passwordHash String
+  avatarUrl    String?
+  bio          String?
+
+  // Presence. `isOnline` is a denormalised cache of "has >=1 live socket";
+  // the authoritative count lives in the process-local presence registry.
+  isOnline   Boolean   @default(false)
+  lastSeenAt DateTime?
+
+  // Marks rows created by prisma/seed.ts. Demo accounts can be signed into
+  // (documented password) but are excluded from "real user" analytics.
+  isSeeded Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions           UserSession[]
+  participations     ConversationParticipant[]
+  messages           Message[]                 @relation("MessageSender")
+  callsInitiated     Call[]                    @relation("CallCaller")
+  callsReceived      Call[]                    @relation("CallCallee")
+  callParticipation  CallParticipant[]
+  blocksMade         BlockedUser[]             @relation("Blocker")
+  blocksReceived     BlockedUser[]             @relation("Blocked")
+  following          Follow[]                  @relation("Follower")
+  followers          Follow[]                  @relation("Following")
+  notifications      Notification[]            @relation("NotificationUser")
+  actedNotifications Notification[]            @relation("NotificationActor")
+  posts              Post[]
+  reels              Reel[]
+  stories            Story[]
+  comments           Comment[]
+  postLikes          PostLike[]
+  savedPosts         SavedPost[]
+
+  @@index([username])
+  @@index([displayName])
+  @@index([isOnline])
+  @@map("users")
+}
+
+/// Rotating refresh tokens. Only a SHA-256 hash of the token is stored, so a
+/// database leak does not hand out live sessions.
+model UserSession {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  /// Set when this token is rotated, pointing at its replacement. Lets us
+  /// detect refresh-token replay (a revoked token being presented again).
+  replacedById String?
+
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model Conversation {
+  id String @id @default(cuid())
+
+  /// Deterministic "a:b" key of the two sorted user ids. Guarantees exactly
+  /// one 1:1 thread per pair even under concurrent creation.
+  pairKey String @unique
+
+  createdAt DateTime @default(now())
+
+  /// Bumped on every new message so the inbox can sort without a join.
+  updatedAt DateTime @default(now())
+
+  participants ConversationParticipant[]
+  messages     Message[]
+  calls        Call[]
+
+  @@index([updatedAt])
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  id             String @id @default(cuid())
+  conversationId String
+  userId         String
+
+  /// Everything created at or before this instant is "read" for this user.
+  lastReadAt DateTime?
+
+  joinedAt   DateTime  @default(now())
+  mutedUntil DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+
+  /// Client-supplied idempotency key, unique per conversation. A retried send
+  /// resolves to the existing row instead of duplicating it.
+  clientId String?
+
+  deliveredAt DateTime?
+  readAt      DateTime?
+  editedAt    DateTime?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, clientId])
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+model Call {
+  id             String  @id @default(cuid())
+  conversationId String?
+  callerId       String
+  calleeId       String
+
+  type   String @default("AUDIO") // AUDIO | VIDEO
+  status String @default("RINGING") // RINGING | ACCEPTED | CONNECTED | ENDED
+
+  /// Why the call terminated; null while it is still live.
+  endReason String? // COMPLETED | REJECTED | CANCELLED | BUSY | TIMEOUT | FAILED | UNAVAILABLE
+
+  startedAt  DateTime  @default(now())
+  answeredAt DateTime?
+  endedAt    DateTime?
+
+  /// Connected talk time in seconds (answeredAt -> endedAt), 0 if unanswered.
+  durationSec Int @default(0)
+
+  /// Incremented when either side had to run an ICE restart mid-call.
+  reconnectCount Int @default(0)
+
+  /// Which user ended it, for history phrasing. Null on server timeouts.
+  endedById String?
+
+  conversation Conversation?     @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  caller       User              @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
+  callee       User              @relation("CallCallee", fields: [calleeId], references: [id], onDelete: Cascade)
+  participants CallParticipant[]
+
+  @@index([callerId, startedAt])
+  @@index([calleeId, startedAt])
+  @@index([conversationId])
+  @@map("calls")
+}
+
+/// Per-user view of a call. Records the voice-changer settings that user
+/// actually applied, which is what the history screen reports back to them.
+model CallParticipant {
+  id     String @id @default(cuid())
+  callId String
+  userId String
+
+  role String // CALLER | CALLEE
+
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+
+  voiceChangerUsed Boolean @default(false)
+  voicePreset      String?
+
+  /// Last observed WebRTC quality bucket, for support and debugging.
+  lastQuality String?
+
+  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([callId, userId])
+  @@index([userId])
+  @@map("call_participants")
+}
+
+model BlockedUser {
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("blocked_users")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  actorId   String?
+  kind      String // LIKE | COMMENT | FOLLOW | MENTION | CALL | MESSAGE
+  text      String
+  href      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user  User  @relation("NotificationUser", fields: [userId], references: [id], onDelete: Cascade)
+  actor User? @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// ============================ DEMO SOCIAL LAYER ============================
+// Intentionally lightweight. These power the familiar social shell and are
+// populated by prisma/seed.ts. Writes are limited to likes / saves / comments
+// so the UI is not made of dead buttons. See docs/architecture.md.
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+  @@map("follows")
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  authorId  String
+  mediaUrl  String
+  mediaKind String   @default("image")
+  caption   String
+  location  String?
+  createdAt DateTime @default(now())
+
+  author   User        @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  likes    PostLike[]
+  comments Comment[]
+  saves    SavedPost[]
+
+  @@index([authorId, createdAt])
+  @@map("posts")
+}
+
+model PostLike {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@map("post_likes")
+}
+
+model SavedPost {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@map("saved_posts")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([postId, createdAt])
+  @@map("comments")
+}
+
+model Reel {
+  id           String   @id @default(cuid())
+  authorId     String
+  videoUrl     String
+  posterUrl    String
+  caption      String
+  audioLabel   String
+  likeCount    Int      @default(0)
+  commentCount Int      @default(0)
+  shareCount   Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@map("reels")
+}
+
+model Story {
+  id        String   @id @default(cuid())
+  authorId  String
+  mediaUrl  String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([authorId])
+  @@map("stories")
+}

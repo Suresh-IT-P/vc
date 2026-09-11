@@ -1,0 +1,57 @@
+{
+  "name": "sonder",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sonder - social shell with real 1:1 messaging and WebRTC voice calling with live male-to-female voice conversion",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "preflight": "node scripts/preflight.mjs",
+    "predev": "node scripts/preflight.mjs",
+    "dev": "concurrently -n server,web -c magenta,cyan \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @sonder/server",
+    "dev:web": "npm run dev -w @sonder/web",
+    "prebuild": "node scripts/preflight.mjs --quiet --no-seed",
+    "build": "npm run build -w @sonder/shared && npm run build -w @sonder/server && npm run build -w @sonder/web",
+    "prestart": "node scripts/preflight.mjs --quiet",
+    "start": "concurrently -n server,web -c magenta,cyan \"npm:start:server\" \"npm:start:web\"",
+    "start:server": "npm run start -w @sonder/server",
+    "start:web": "npm run start -w @sonder/web",
+    "pretypecheck": "node scripts/preflight.mjs --quiet --skip-db",
+    "typecheck": "npm run typecheck -w @sonder/shared && npm run typecheck -w @sonder/server && npm run typecheck -w @sonder/web",
+    "lint": "npm run lint -w @sonder/web",
+    "pretest": "node scripts/preflight.mjs --quiet --skip-db",
+    "test": "npm run test -w @sonder/server && npm run test -w @sonder/web",
+    "pretest:server": "node scripts/preflight.mjs --quiet --skip-db",
+    "test:server": "npm run test -w @sonder/server",
+    "pretest:voice": "node scripts/preflight.mjs --quiet --skip-db",
+    "test:voice": "npm run test -w @sonder/web",
+    "smoke": "node scripts/smoke.mjs",
+    "load-check": "node scripts/load-check.mjs",
+    "db:generate": "npm run db:generate -w @sonder/server",
+    "db:migrate": "npm run db:migrate -w @sonder/server",
+    "db:seed": "npm run db:seed -w @sonder/server",
+    "db:reset": "npm run db:reset -w @sonder/server",
+    "db:push": "npm run db:push -w @sonder/server",
+    "db:studio": "npm run db:studio -w @sonder/server",
+    "build:worklet": "node scripts/build-worklet.mjs",
+    "setup": "npm install && node scripts/preflight.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true,
+    "prisma@6.19.3": true,
+    "unrs-resolver@1.12.2": true
+  }
+}

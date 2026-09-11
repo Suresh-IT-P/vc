@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280" viewBox="0 0 720 1280" fill="none"><defs><linearGradient id="g73" x1="0%" y1="0%" x2="-8.7%" y2="99.6%">
+      <stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+      <clipPath id="c73"><rect width="720" height="1280"/></clipPath></defs>
+     <rect width="720" height="1280" fill="url(#g73)"/>
+     <g clip-path="url(#c73)"><rect x="712" y="763" width="279" height="257" rx="128" fill="#ffffff" opacity="0.089" transform="rotate(-15.3 712 763)"/><rect x="684" y="528" width="207" height="161" rx="81" fill="#000000" opacity="0.184" transform="rotate(17.3 684 528)"/><rect x="153" y="54" width="336" height="253" rx="127" fill="#ffffff" opacity="0.091" transform="rotate(23.2 153 54)"/><rect x="672" y="862" width="375" height="177" rx="88" fill="#000000" opacity="0.101" transform="rotate(-5.4 672 862)"/><rect x="364" y="721" width="456" height="290" rx="145" fill="#ffffff" opacity="0.067" transform="rotate(25.4 364 721)"/><rect x="492" y="447" width="462" height="184" rx="92" fill="#000000" opacity="0.065" transform="rotate(25.6 492 447)"/><rect x="479" y="468" width="292" height="196" rx="98" fill="#ffffff" opacity="0.116" transform="rotate(-9.5 479 468)"/></g></svg>

@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.log
+npm-debug.log*
+.env
+.env.local
+.env.*.local
+!.env.example
+.DS_Store
+Thumbs.db
+*.tsbuildinfo
+# SQLite databases and the sidecar files WAL mode creates. The schema and its
+# migrations ARE tracked (apps/server/prisma/migrations) — only data is ignored.
+apps/server/prisma/*.db
+apps/server/prisma/*.db-journal
+apps/server/prisma/*.db-wal
+apps/server/prisma/*.db-shm
+apps/server/generated/
+apps/web/public/worklets/voice-processor.js
+certs/
+.turbo/

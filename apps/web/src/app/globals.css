@@ -1,0 +1,179 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 12%;
+
+    --primary: 266 85% 58%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 240 6% 96%;
+    --secondary-foreground: 240 10% 20%;
+
+    --muted: 240 6% 96%;
+    --muted-foreground: 240 5% 45%;
+
+    --accent: 175 70% 41%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 78% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 266 85% 58%;
+
+    --radius: 0.75rem;
+
+    /* Viewport height that accounts for mobile browser chrome. Overwritten by
+       useViewportHeight(); the fallback keeps SSR output sensible. */
+    --app-height: 100vh;
+  }
+
+  .dark {
+    --background: 240 12% 6%;
+    --foreground: 240 6% 94%;
+
+    --card: 240 11% 9%;
+    --card-foreground: 240 6% 94%;
+
+    --popover: 240 11% 10%;
+    --popover-foreground: 240 6% 94%;
+
+    --primary: 266 88% 68%;
+    --primary-foreground: 240 12% 8%;
+
+    --secondary: 240 8% 15%;
+    --secondary-foreground: 240 6% 92%;
+
+    --muted: 240 8% 15%;
+    --muted-foreground: 240 5% 62%;
+
+    --accent: 175 65% 48%;
+    --accent-foreground: 240 12% 8%;
+
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 240 8% 18%;
+    --input: 240 8% 20%;
+    --ring: 266 88% 68%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    /* No horizontal overflow anywhere, on any screen. */
+    overflow-x: hidden;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Respect the user's motion preference: the call UI animates a lot. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* Visible focus for keyboard users without a permanent outline for mouse users. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  .app-shell {
+    min-height: var(--app-height);
+  }
+
+  /* Thin, unobtrusive scrollbars in scroll regions. */
+  .scroll-area {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scroll-area::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-area::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 9999px;
+  }
+  .scroll-area::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Hidden scrollbar for horizontal rails (stories, tabs). */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .glass {
+    @apply bg-background/72 backdrop-blur-xl backdrop-saturate-150;
+  }
+
+  /* The brand mark's gradient text, used sparingly. */
+  .brand-text {
+    @apply bg-brand-gradient bg-clip-text text-transparent;
+  }
+
+  /* Story ring: gradient border via a padded wrapper. */
+  .story-ring {
+    @apply bg-ring-gradient p-[2px];
+  }
+
+  /* Safe-area padding so the mobile tab bar clears the home indicator. */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .skeleton {
+    @apply relative overflow-hidden bg-muted;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-foreground/[0.06] to-transparent;
+  }
+}
+
+@layer utilities {
+  /* Chat bubble tails, drawn with a clip path rather than an extra element. */
+  .bubble-out {
+    border-radius: 1.125rem 1.125rem 0.25rem 1.125rem;
+  }
+  .bubble-in {
+    border-radius: 1.125rem 1.125rem 1.125rem 0.25rem;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}

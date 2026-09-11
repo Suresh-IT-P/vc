@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280" viewBox="0 0 720 1280" fill="none"><defs><linearGradient id="g75" x1="0%" y1="0%" x2="-81.9%" y2="57.4%">
+      <stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+      <clipPath id="c75"><rect width="720" height="1280"/></clipPath></defs>
+     <rect width="720" height="1280" fill="url(#g75)"/>
+     <g clip-path="url(#c75)"><path d="M486 302 L353 997 L474 1250 Z" fill="#ffffff" opacity="0.095"/><path d="M719 525 L574 1142 L601 1015 Z" fill="#000000" opacity="0.071"/><path d="M155 679 L64 369 L619 52 Z" fill="#ffffff" opacity="0.188"/><path d="M488 342 L52 496 L643 1089 Z" fill="#000000" opacity="0.219"/><path d="M51 504 L630 562 L398 639 Z" fill="#ffffff" opacity="0.100"/><path d="M383 706 L213 642 L66 84 Z" fill="#000000" opacity="0.122"/><path d="M16 367 L221 233 L130 167 Z" fill="#ffffff" opacity="0.110"/></g></svg>
