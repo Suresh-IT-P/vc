@@ -21,7 +21,7 @@
  *  /socket.io         │  (pages, /_next, /media)
  *  /health            │
  *         ▼           ▼
- *     API :4000   Next :3000        ← 127.0.0.1 only, never exposed
+ *     API :auto    Next :auto       ← 127.0.0.1 only, never exposed
  *
  * It is the same split Nginx does, so there is one routing rule to reason about
  * rather than two that can drift.
@@ -38,7 +38,7 @@
  *   node scripts/serve.mjs [--skip-preflight]
  */
 import { spawn } from 'node:child_process';
-import { connect } from 'node:net';
+import { connect, createServer as createProbeServer } from 'node:net';
 import { createServer, request as httpRequest } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,9 +47,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 
 const PUBLIC_PORT = Number(process.env.PORT ?? 8080);
-/** Loopback ports for the children. Overridable in case something else is there. */
-const API_PORT = Number(process.env.API_INTERNAL_PORT ?? 4000);
-const WEB_PORT = Number(process.env.WEB_INTERNAL_PORT ?? 3000);
 const HOST = '127.0.0.1';
 
 /** Prefixes that belong to the API. Everything else is the web app's. */
@@ -82,13 +79,55 @@ function spawnChild(name, argv, env) {
   return child;
 }
 
-function shutdown(code) {
+/**
+ * How long children get to finish in-flight work before being killed outright.
+ * Railway sends SIGTERM and then SIGKILLs after its own grace period, so this
+ * stays comfortably inside that.
+ */
+const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS ?? 8000);
+
+/** Assigned once the public server exists; null before that. */
+let publicServer = null;
+
+/**
+ * Drain rather than guillotine.
+ *
+ * The first version sent SIGTERM and called process.exit after a flat 400 ms,
+ * which is not enough for a request to finish or for the API to close the
+ * database, and on a redeploy that lands on anyone mid-call. Now: stop accepting
+ * new connections, signal the children, and actually wait for them to exit —
+ * falling back to SIGKILL only if they overstay the grace period.
+ */
+async function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const { child } of children) {
-    if (!child.killed) child.kill('SIGTERM');
+
+  // Stop accepting new connections first, so the platform's edge sees this
+  // instance go away instead of handing it requests it is about to drop.
+  publicServer?.close();
+
+  const alive = children.filter(({ child }) => child.exitCode === null && child.signalCode === null);
+  const exits = alive.map(
+    ({ child }) => new Promise((resolveExit) => child.once('exit', resolveExit)),
+  );
+  for (const { child } of alive) child.kill('SIGTERM');
+
+  let timer;
+  await Promise.race([
+    Promise.all(exits),
+    new Promise((resolveTimeout) => {
+      timer = setTimeout(resolveTimeout, SHUTDOWN_GRACE_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+
+  for (const { name, child } of alive) {
+    if (child.exitCode === null && child.signalCode === null) {
+      fail(`${name} did not exit within ${SHUTDOWN_GRACE_MS}ms; killing`);
+      child.kill('SIGKILL');
+    }
   }
-  setTimeout(() => process.exit(code), 400);
+  process.exit(code);
 }
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
@@ -119,7 +158,58 @@ if (!process.argv.includes('--skip-preflight')) {
   });
 }
 
-/* -- 2. Start both children on loopback ----------------------------------- */
+/* -- 2. Choose loopback ports that cannot collide with the public one ------ */
+
+/**
+ * Pick the children's ports at runtime instead of hard-coding them.
+ *
+ * This exists because hard-coding them broke a deploy. The internal default for
+ * the API was 4000 — the same number this project documents for the API — and
+ * the platform set `PORT=4000` too. The proxy bound 0.0.0.0:4000, handed the API
+ * child 127.0.0.1:4000, and the child died with EADDRINUSE on a restart loop.
+ * 0.0.0.0 covers loopback, so "public port" and "internal port" can never be the
+ * same number, and *any* fixed default is one unlucky $PORT away from collision.
+ *
+ * So: prefer the conventional port, but treat it as a hint. If it is the public
+ * port or already in use, ask the OS for a free one. The chosen ports are logged,
+ * because "the API is on some port I picked" is only acceptable if you can see
+ * which.
+ */
+function probePort(port) {
+  return new Promise((resolveProbe) => {
+    const probe = createProbeServer();
+    probe.once('error', () => resolveProbe(null));
+    probe.once('listening', () => {
+      const { port: actual } = probe.address();
+      probe.close(() => resolveProbe(actual));
+    });
+    probe.listen(port, HOST);
+  });
+}
+
+async function pickPort(name, preferred, taken) {
+  if (preferred && !taken.has(preferred)) {
+    const got = await probePort(preferred);
+    if (got) return got;
+    log(`${name}: port ${preferred} is busy, asking the OS for another`);
+  } else if (preferred) {
+    log(`${name}: port ${preferred} is the public port, asking the OS for another`);
+  }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const got = await probePort(0);
+    if (got && !taken.has(got)) return got;
+  }
+  fail(`could not find a free loopback port for ${name}`);
+  process.exit(1);
+}
+
+const taken = new Set([PUBLIC_PORT]);
+const API_PORT = await pickPort('api', Number(process.env.API_INTERNAL_PORT ?? 4000), taken);
+taken.add(API_PORT);
+const WEB_PORT = await pickPort('web', Number(process.env.WEB_INTERNAL_PORT ?? 3000), taken);
+taken.add(WEB_PORT);
+
+/* -- 3. Start both children on loopback ----------------------------------- */
 
 /**
  * Teach the API which public origin it is behind.
@@ -165,11 +255,36 @@ if (discovered.length > 0) {
  * gets secure cookies and `trust proxy` (needed for per-client rate limiting
  * behind the platform's edge) without anyone configuring NODE_ENV anywhere.
  */
+/*
+ * Secure cookies, when we can prove we are behind TLS.
+ *
+ * The platform terminates HTTPS at its edge and forwards plain HTTP to us, so the
+ * API sees an insecure connection and left the refresh cookie without `Secure` —
+ * it logged "COOKIE_SECURE=false in production" and meant it. The browser's
+ * connection *is* HTTPS, so the flag belongs on.
+ *
+ * Gated on having discovered a public origin rather than set unconditionally:
+ * that is the signal that a platform edge is in front of us. Running this script
+ * on plain HTTP locally therefore changes nothing. An explicit COOKIE_SECURE
+ * always wins.
+ */
+const behindTlsEdge = discovered.length > 0;
+const cookieSecure = process.env.COOKIE_SECURE ?? (behindTlsEdge ? 'true' : undefined);
+if (behindTlsEdge && process.env.COOKIE_SECURE === undefined) {
+  log('behind a TLS edge: setting COOKIE_SECURE=true');
+} else if (behindTlsEdge && cookieSecure !== 'true' && cookieSecure !== '1') {
+  // Deliberately not overridden — an explicit setting is respected. But say so,
+  // because the usual cause is COOKIE_SECURE=false copied out of .env.example.
+  fail(`COOKIE_SECURE=${cookieSecure} but this is served over HTTPS.`);
+  fail('Remove COOKIE_SECURE from your host variables to let it default to true.');
+}
+
 spawnChild('api', [resolve(repoRoot, 'apps/server/dist/index.js')], {
   NODE_ENV: 'production',
   PORT: String(API_PORT),
   HOST,
   ...(corsOrigins.length > 0 ? { CORS_ORIGINS: corsOrigins.join(',') } : {}),
+  ...(cookieSecure !== undefined ? { COOKIE_SECURE: cookieSecure } : {}),
 });
 
 // next-web.mjs forces NODE_ENV=production for `start` itself.
@@ -177,7 +292,7 @@ spawnChild('web', [resolve(here, 'next-web.mjs'), 'start', '-H', HOST], {
   WEB_PORT: String(WEB_PORT),
 });
 
-/* -- 3. Proxy ------------------------------------------------------------- */
+/* -- 4. Proxy ------------------------------------------------------------- */
 
 const targetFor = (url) =>
   API_PREFIXES.some((prefix) => url === prefix || url.startsWith(`${prefix}/`) || url.startsWith(`${prefix}?`))
@@ -248,6 +363,9 @@ server.on('upgrade', (req, clientSocket, head) => {
   upstream.on('error', drop);
   clientSocket.on('error', drop);
 });
+
+// Expose it to shutdown() so draining can stop accepting connections.
+publicServer = server;
 
 server.listen(PUBLIC_PORT, '0.0.0.0', () => {
   log(`listening on 0.0.0.0:${PUBLIC_PORT}`);
