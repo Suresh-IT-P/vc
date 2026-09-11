@@ -137,7 +137,8 @@ Open **http://localhost:3000**. Sign up, or sign in as a seeded account:
 | --- | --- |
 | `npm run dev` | API + web with hot reload (runs preflight first) |
 | `npm run build` | Build shared, server and web for production |
-| `npm start` | Run the production builds |
+| `npm start` | Run the production builds on ONE port (proxies /api + /socket.io) |
+| `npm run start:split` | Same, but on two ports — for running behind your own Nginx |
 | `npm test` | All 121 tests (server integration + DSP) |
 | `npm run test:server` | Server: auth, messaging, realtime, calling, acceptance |
 | `npm run test:voice` | The DSP engine, numerically verified |

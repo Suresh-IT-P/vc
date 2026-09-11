@@ -85,8 +85,12 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.web
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
-        NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-http://localhost:4000}
+        # Empty by default on purpose: behind Nginx the web app and API share
+        # one origin, so the browser should use relative URLs. A localhost default
+        # here would bake "http://localhost:4000" into the bundle and send every
+        # visitor to their own machine. Set these only for a split-host deploy.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-}
     container_name: sonder-web
     restart: unless-stopped
     profiles: ['full']

@@ -6,7 +6,7 @@
     "predev": "node ../../scripts/build-worklet.mjs",
     "dev": "node ../../scripts/next-web.mjs dev",
     "prebuild": "node ../../scripts/build-worklet.mjs",
-    "build": "next build",
+    "build": "node ../../scripts/next-web.mjs build",
     "start": "node ../../scripts/next-web.mjs start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",

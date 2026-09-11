@@ -1,5 +1,22 @@
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? 'http://localhost:4000';
+/**
+ * Where the API lives, from the browser's point of view.
+ *
+ * `NEXT_PUBLIC_API_URL` wins when set (it is inlined at build time). Otherwise
+ * the fallback depends on the build:
+ *
+ *   development — http://localhost:4000, because `npm run dev` puts the web app
+ *                 on 3000 and the API on 4000: genuinely different origins.
+ *   production  — "" , i.e. same-origin relative URLs. Every production topology
+ *                 here serves both behind one origin (Nginx, or scripts/serve.mjs
+ *                 on a single-port host), so same-origin is the correct default.
+ *                 It used to fall back to localhost:4000 in production too, which
+ *                 meant a deploy with the variable unset sent every visitor's
+ *                 browser to its *own* machine — a failure that looks like the
+ *                 server being down.
+ */
+const FALLBACK_API_URL = process.env.NODE_ENV === 'development' ? 'http://localhost:4000' : '';
+
+export const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? FALLBACK_API_URL;
 
 const TOKEN_STORAGE_KEY = 'sonder.accessToken';
 

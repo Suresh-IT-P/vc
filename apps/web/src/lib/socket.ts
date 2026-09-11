@@ -4,10 +4,18 @@ import { api, getAccessToken } from './api';
 
 export type SonderSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-const SOCKET_URL =
+/**
+ * Same fallback rule as API_URL in ./api: an explicit variable wins, otherwise
+ * localhost:4000 in development and same-origin in a production build. An empty
+ * string would be passed to `io()` as a URL, so it becomes `undefined` instead —
+ * which is how socket.io-client is told "connect back to this page's origin".
+ */
+const CONFIGURED_SOCKET_URL =
   process.env.NEXT_PUBLIC_SOCKET_URL?.replace(/\/$/, '') ??
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ??
-  'http://localhost:4000';
+  (process.env.NODE_ENV === 'development' ? 'http://localhost:4000' : '');
+
+const SOCKET_URL = CONFIGURED_SOCKET_URL === '' ? undefined : CONFIGURED_SOCKET_URL;
 
 let socket: SonderSocket | null = null;
 let connectionListeners = new Set<(connected: boolean) => void>();

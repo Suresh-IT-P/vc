@@ -20,7 +20,7 @@ SQLite path. For production set at minimum:
 | `JWT_SECRET` | ≥32 chars. `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
 | `CORS_ORIGINS` | Comma-separated. Exact origins — no wildcard. |
 | `COOKIE_SECURE` | `true` in production |
-| `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_SOCKET_URL` | Baked in at build time |
+| `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_SOCKET_URL` | Inlined at build time. Leave unset unless the API is on a different origin than the web app. |
 | `TURN_SERVER`, `TURN_SECRET`, `TURN_REALM` | See below |
 
 `env.ts` validates everything with Zod at boot and **refuses to start** on a bad
@@ -46,12 +46,86 @@ Migrations are applied automatically: preflight (and the server container's
 entrypoint) runs `prisma migrate deploy`, which only ever applies migrations
 already committed to the repo. It never resets or drops anything.
 
-`NEXT_PUBLIC_*` values are inlined at build time. Changing the API URL means
-rebuilding the web image, not restarting it. `next.config.mjs` reads the
+`NEXT_PUBLIC_*` values are **inlined at build time**, so changing the API URL
+means rebuilding the web app, not restarting it. `next.config.mjs` reads the
 repo-root `.env` explicitly, because Next only auto-loads `.env` from its own
-directory — without that, `NEXT_PUBLIC_API_URL` set at the root would be ignored
-and the app would fall back to `localhost`, which looks correct in development
-and breaks on deploy.
+directory — without that, a root-level `NEXT_PUBLIC_API_URL` would be silently
+ignored.
+
+Unset is the right answer for every topology here, and the fallback is chosen by
+build type: `http://localhost:4000` in a development build (where `npm run dev`
+really does split the ports) and **same-origin relative URLs** in a production
+build. Both Nginx and `scripts/serve.mjs` serve the app and API from one origin,
+so relative is correct.
+
+That fallback used to be `http://localhost:4000` in production too, and it caused
+a live bug: a deploy with the variable unset shipped a bundle that sent every
+visitor's browser to *its own machine*, which presents as "the server is down".
+Neither `.env.example` nor `docker-compose.yml` carries a localhost default any
+more, for the same reason.
+
+---
+
+## Single-port hosts (Railway, Render, Fly)
+
+These platforms route **one port per service**, but Sonder is two processes. Left
+alone, whichever process claimed `$PORT` won and the other was unreachable — the
+public URL answered with API JSON instead of the app.
+
+[`scripts/serve.mjs`](../scripts/serve.mjs) is the entry point for that shape, and
+is what plain `npm start` runs. It binds `$PORT`, keeps both children on
+loopback, and applies the same routing Nginx does:
+
+```
+Railway $PORT ──► scripts/serve.mjs ──┬── /api, /socket.io, /health ──► API  127.0.0.1:4000
+                                      └── everything else ────────────► Next 127.0.0.1:3000
+```
+
+It also handles the HTTP **upgrade** to a WebSocket. That is not optional
+polish: Socket.IO carries all messaging and call signalling, and an HTTP-only
+proxy drops upgrades silently — pages would load while every message and call
+failed.
+
+[`railway.json`](../railway.json) sets the start command and points the health
+check at `/health/ready`, so the deploy config lives in the repo rather than in a
+dashboard nobody can diff.
+
+### What to set in Railway
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `JWT_SECRET` | 48 random bytes | Without it preflight generates one per boot, and every session dies on each deploy. |
+| `DATABASE_URL` | `file:/data/sonder.db` | The volume path below. |
+| `TURN_SERVER`, `TURN_SECRET` | your TURN service | Otherwise calls fail on most mobile networks. |
+
+And **add a volume**: Railway → service → Settings → Volumes, mount path `/data`.
+Without it the container filesystem is ephemeral and every deploy resets all
+accounts, messages and call history.
+
+`CORS_ORIGINS` and `NEXT_PUBLIC_API_URL` are deliberately **not** in that list:
+
+- `serve.mjs` adds the platform's public origin to `CORS_ORIGINS` itself, reading
+  `RAILWAY_PUBLIC_DOMAIN` (or `PUBLIC_URL` elsewhere) and logging what it added.
+  Anything you set is kept; the origin is only ever appended.
+- `NEXT_PUBLIC_API_URL` unset means same-origin relative URLs in a production
+  build, which is correct here. Set it only when the API is on a different host.
+
+### Do not set `NODE_ENV`
+
+It is the one variable that breaks this deployment in two different ways, and
+both failures point somewhere else entirely:
+
+- **`NODE_ENV=development`** makes `next build` abort with
+  `<Html> should not be imported outside of pages/_document` while prerendering
+  the error page — an App Router project pointed at the Pages Router, for a file
+  that does not exist. This is a real failure that happened on this project.
+- **`NODE_ENV=production`** makes `npm install` omit devDependencies, and `tsc`,
+  `next` and the Prisma CLI all live there, so the build fails for lack of tools.
+
+Leave it unset. Every runtime sets the right value itself:
+`scripts/next-web.mjs` forces `development` for `next dev` and `production` for
+`next build`/`next start`, and `serve.mjs` starts the API with
+`NODE_ENV=production`. Nothing is inherited from the host.
 
 ---
 

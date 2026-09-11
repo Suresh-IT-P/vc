@@ -163,16 +163,84 @@ if (!clientIsCurrent()) {
   record('prisma client', 'up to date');
 }
 
-/* Apply committed migrations. `migrate deploy` is the right verb everywhere: it
- * only ever applies migrations that are already in the repo, never invents or
- * resets one, so it is as safe on a production file as on a throwaway dev one. */
 const dbFile = resolve(serverRoot, 'prisma', databaseUrl.slice('file:'.length));
 const createdDatabase = !existsSync(dbFile);
-run(PRISMA_CLI, ['migrate', 'deploy', `--schema=${SCHEMA}`], {
-  cwd: serverRoot,
-  capture: true,
-});
-record('database', createdDatabase ? `created ${databaseUrl}` : `${databaseUrl} migrated`);
+
+/** Opens the real client, runs `fn`, and always disconnects. */
+async function withPrisma(fn) {
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  try {
+    return await fn(prisma);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+/*
+ * Apply committed migrations — but only when some are actually pending.
+ *
+ * `migrate deploy` is the right verb (it only applies migrations already in the
+ * repo; it never invents or resets one), yet it takes a write lock even when
+ * there is nothing to do. Running it unconditionally therefore failed with
+ * "SQLite database error: database is locked" in the most ordinary situation
+ * there is: `npm run dev` in one terminal and `npm run build` in another.
+ *
+ * Reading which migrations are already applied is a plain SELECT, and WAL lets
+ * that run alongside a live server. So the lock is only ever taken when the
+ * schema genuinely has to change.
+ */
+const migrationsDir = resolve(serverRoot, 'prisma/migrations');
+const migrationsOnDisk = existsSync(migrationsDir)
+  ? readdirSync(migrationsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort()
+  : [];
+
+let applied = [];
+if (!createdDatabase) {
+  try {
+    applied = await withPrisma(async (prisma) => {
+      const rows = await prisma.$queryRawUnsafe(
+        'SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL',
+      );
+      return rows.map((row) => row.migration_name);
+    });
+  } catch {
+    // No _prisma_migrations table yet (or the file is unreadable). Either way,
+    // treat everything as pending and let `migrate deploy` give the real error.
+    applied = [];
+  }
+}
+
+const pending = migrationsOnDisk.filter((name) => !applied.includes(name));
+
+if (pending.length === 0) {
+  record('database', `${databaseUrl} up to date (${applied.length} migration(s))`);
+} else {
+  try {
+    run(PRISMA_CLI, ['migrate', 'deploy', `--schema=${SCHEMA}`], {
+      cwd: serverRoot,
+      capture: true,
+    });
+  } catch (error) {
+    const detail = String(error?.stderr ?? error?.message ?? error);
+    if (/database is locked/i.test(detail)) {
+      warn(`${pending.length} migration(s) to apply, but the database is locked.`);
+      warn('Stop anything already using it (npm run dev / npm start) and re-run.');
+    } else {
+      warn(`migrate deploy failed: ${detail.split('\n').find(Boolean) ?? detail}`);
+    }
+    process.exit(1);
+  }
+  record(
+    'database',
+    createdDatabase
+      ? `created ${databaseUrl} (${pending.length} migration(s))`
+      : `applied ${pending.length} migration(s)`,
+  );
+}
 
 /* -- 5. Prove it, and seed if empty ---------------------------------------- */
 /* Importing the real client is the only check that means anything: it exercises
@@ -180,13 +248,7 @@ record('database', createdDatabase ? `created ${databaseUrl}` : `${databaseUrl} 
 
 let userCount = null;
 try {
-  const { PrismaClient } = await import('@prisma/client');
-  const prisma = new PrismaClient();
-  try {
-    userCount = await prisma.user.count();
-  } finally {
-    await prisma.$disconnect();
-  }
+  userCount = await withPrisma((prisma) => prisma.user.count());
 } catch (error) {
   const message = String(error?.message ?? error);
   const code = error?.code;
