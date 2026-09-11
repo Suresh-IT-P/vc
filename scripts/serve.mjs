@@ -318,9 +318,20 @@ function forwardedHeaders(req) {
 
 const server = createServer((req, res) => {
   const target = targetFor(req.url ?? '/');
+
+  // A client that vanishes mid-exchange must not be able to take the whole
+  // container down with it. pipe() forwards data but never 'error', and an
+  // 'error' event with no listener is an uncaught exception, so every stream in
+  // the chain gets one. Aborts are ordinary traffic - a reload, a closed tab, an
+  // edge giving up - and which of these streams surfaces one differs between
+  // Node versions, which on a platform is not a version we choose.
+  req.on('error', () => res.destroy());
+  res.on('error', () => req.destroy());
+
   const upstream = httpRequest(
     { host: HOST, port: target.port, method: req.method, path: req.url, headers: forwardedHeaders(req) },
     (upstreamRes) => {
+      upstreamRes.on('error', () => res.destroy());
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
       upstreamRes.pipe(res);
     },
@@ -329,6 +340,9 @@ const server = createServer((req, res) => {
   upstream.on('error', (error) => {
     // ECONNREFUSED here almost always means a child is still booting. Say which
     // one, because "502" alone sends people looking in the wrong process.
+    // Nothing to report if the response is already gone: ending it a second
+    // time is itself an error event.
+    if (res.writableEnded || res.destroyed) return;
     if (!res.headersSent) {
       res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8', 'retry-after': '2' });
     }
@@ -367,10 +381,31 @@ server.on('upgrade', (req, clientSocket, head) => {
 // Expose it to shutdown() so draining can stop accepting connections.
 publicServer = server;
 
-server.listen(PUBLIC_PORT, '0.0.0.0', () => {
-  log(`listening on 0.0.0.0:${PUBLIC_PORT}`);
+/*
+ * No host argument, on purpose.
+ *
+ * Node then binds `::` dual-stack and accepts IPv6 *and* IPv4-mapped
+ * connections, falling back to 0.0.0.0 by itself where IPv6 is unavailable.
+ *
+ * This was an explicit '0.0.0.0', which is IPv4-only, and several platforms
+ * (Railway among them) carry internal traffic over IPv6. An IPv4-only listener
+ * refuses the edge's connection immediately, and the symptom is a container that
+ * booted perfectly sitting behind a 502 "Application failed to respond" — it
+ * reads as a crash and is not one. Binding both is strictly more permissive and
+ * costs nothing, so there is no reason to narrow it.
+ */
+server.listen(PUBLIC_PORT, () => {
+  const { address, family } = server.address();
+  const shown = family === 'IPv6' ? `[${address}]` : address;
+  log(`listening on ${shown}:${PUBLIC_PORT} (${family}${family === 'IPv6' ? ' dual-stack, IPv4 included' : ''})`);
   log(`  ${API_PREFIXES.join(', ')} -> api  ${HOST}:${API_PORT}`);
   log(`  everything else          -> web  ${HOST}:${WEB_PORT}`);
+  if (process.env.PORT === undefined) {
+    log(`PORT is unset, so this is the built-in default (${PUBLIC_PORT}).`);
+    log('If a platform edge fronts this, the port it forwards to must be that number.');
+    log('A mismatch answers every request with 502 "Application failed to respond"');
+    log('while these logs look completely healthy.');
+  }
 });
 
 server.on('error', (error) => {

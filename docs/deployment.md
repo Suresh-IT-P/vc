@@ -110,6 +110,28 @@ accounts, messages and call history.
 - `NEXT_PUBLIC_API_URL` unset means same-origin relative URLs in a production
   build, which is correct here. Set it only when the API is on a different host.
 
+### A healthy log behind a 502
+
+`Application failed to respond` (with `x-railway-fallback: true`) while the deploy
+log shows both children up and the database open means the edge could not open a
+TCP connection to the container at all. Nothing crashed — the edge is knocking on
+a door nobody is behind. Two causes, and the log looks identical for both:
+
+- **The domain's target port is not the port we bound.** Railway fixes a target
+  port when the domain is created and does not follow later changes to `PORT`.
+  Check service → Settings → Networking and make it the port the log reports.
+  This is why `serve.mjs` now says whether `PORT` came from the platform or from
+  its own default — the number alone cannot tell you.
+- **An IPv4-only listener.** `listen(port, '0.0.0.0')` refuses IPv6 connections
+  with `ECONNREFUSED` immediately, and platform-internal networks are frequently
+  IPv6. `serve.mjs` passes no host, so Node binds `::` dual-stack and accepts
+  both families. Do not narrow it back to `0.0.0.0`.
+
+The timing separates these from a real fault: a 502 in well under a second is a
+refused connection, and one that arrives at your `healthcheckTimeout` is a process
+that is listening but not answering — a different problem, usually visible in the
+logs.
+
 ### Do not set `NODE_ENV`
 
 It is the one variable that breaks this deployment in two different ways, and
@@ -275,6 +297,7 @@ but cannot open its database should not receive traffic.
 - [ ] `TURN_SERVER` + `TURN_SECRET` set and verified with Trickle ICE
 - [ ] `EXTERNAL_IP` on coturn is the public address
 - [ ] Firewall opens 80/443 plus the TURN ports
+- [ ] The public domain's target port matches the port in the `listening on …` log line
 - [ ] `prisma migrate deploy` runs before traffic is served
 - [ ] Backups scheduled with `sqlite3 .backup` (or Litestream) and a restore tested
 - [ ] Logs shipped somewhere (production output is single-line JSON)
