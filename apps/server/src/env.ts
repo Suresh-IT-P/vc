@@ -39,6 +39,22 @@ const envSchema = z.object({
   HOST: z.string().default('0.0.0.0'),
 
   /**
+   * How many proxies sit in front of this process, for Express `trust proxy`.
+   *
+   * This is a count, not a switch, and getting it wrong silently disables
+   * per-client rate limiting. Express trusts the last N addresses in
+   * X-Forwarded-For and calls the next one the client, so with one hop too few
+   * `req.ip` is the nearest proxy: every visitor shares a single bucket and
+   * AUTH_RATE_LIMIT_MAX becomes a site-wide limit, which looks like a working
+   * app until traffic arrives.
+   *
+   *   1  one proxy, the default: Nginx, or serve.mjs on its own.
+   *   2  two: a platform edge in front of serve.mjs. scripts/serve.mjs sets
+   *      this itself when it detects one, so nobody has to count.
+   */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
+
+  /**
    * A SQLite connection string: `file:` plus a path, resolved by Prisma relative
    * to prisma/schema.prisma. Rejecting other schemes here turns a leftover
    * `mysql://…` URL into one clear line at boot rather than a Prisma engine

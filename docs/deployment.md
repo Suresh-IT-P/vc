@@ -97,6 +97,7 @@ dashboard nobody can diff.
 | `JWT_SECRET` | 48 random bytes | Without it preflight generates one per boot, and every session dies on each deploy. |
 | `DATABASE_URL` | `file:/data/sonder.db` | The volume path below. |
 | `TURN_SERVER`, `TURN_SECRET` | your TURN service | Otherwise calls fail on most mobile networks. |
+| `SEED_DEMO_DATA` | `true`, only if you want it | Production start does not seed. Setting this creates the twelve demo accounts whose password the login page publishes. |
 
 And **add a volume**: Railway → service → Settings → Volumes, mount path `/data`.
 Without it the container filesystem is ephemeral and every deploy resets all
@@ -109,6 +110,28 @@ accounts, messages and call history.
   Anything you set is kept; the origin is only ever appended.
 - `NEXT_PUBLIC_API_URL` unset means same-origin relative URLs in a production
   build, which is correct here. Set it only when the API is on a different host.
+
+### Two proxies, not one
+
+`trust proxy` is a hop count, and single-port hosting adds a hop: the platform
+edge forwards to `serve.mjs`, which forwards to the API. Express trusts the last
+N addresses in `X-Forwarded-For` and calls the next one the client, so a count
+of 1 where there are 2 makes `req.ip` the *edge's* address:
+
+```
+client 203.0.113.9 -> railway edge 100.64.0.1 -> serve.mjs 127.0.0.1 -> api
+  trust proxy = 1 -> req.ip = 100.64.0.1     every visitor, one bucket
+  trust proxy = 2 -> req.ip = 203.0.113.9    correct
+```
+
+Undercounting does not fail, it just merges everyone into a single rate-limit
+bucket, so `AUTH_RATE_LIMIT_MAX=20` silently becomes twenty logins per minute for
+the whole site. `serve.mjs` sets `TRUST_PROXY_HOPS=2` when it detects an edge in
+front of it and `env.ts` defaults to 1 for Nginx, so this needs setting by hand
+only in an unusual topology.
+
+Overcounting is the worse direction: a client can then forge `X-Forwarded-For`
+and claim any address it likes. Do not raise it "just in case".
 
 ### A healthy log behind a 502
 

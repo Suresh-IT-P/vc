@@ -15,9 +15,12 @@ import { prisma } from './db.js';
 export function createApp(): Express {
   const app = express();
 
-  // Behind Nginx, req.ip must come from X-Forwarded-For or every client looks
-  // like 127.0.0.1 and rate limiting becomes global.
-  app.set('trust proxy', isProd ? 1 : false);
+  // Behind a proxy, req.ip must come from X-Forwarded-For or every client looks
+  // like 127.0.0.1 and rate limiting becomes global. The count matters: this was
+  // a hard-coded 1 while single-port hosting put two proxies in front (the
+  // platform edge, then scripts/serve.mjs), so req.ip was the edge's address and
+  // every visitor shared one rate-limit bucket. See TRUST_PROXY_HOPS in env.ts.
+  app.set('trust proxy', isProd ? env.TRUST_PROXY_HOPS : false);
   app.disable('x-powered-by');
 
   app.use(

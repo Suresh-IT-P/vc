@@ -132,9 +132,25 @@ async function refreshSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
-function buildUrl(path: string, query?: RequestOptions['query']): string {
+/**
+ * Resolve a request path, which is usually relative.
+ *
+ * The second argument to `new URL()` is the entire point of this function.
+ * One-argument `new URL()` demands an absolute URL, and API_URL is "" for the
+ * same-origin production build — so every call through here threw
+ * "TypeError: Invalid URL" before the request was ever made. It went unnoticed
+ * because the only call that does not use this helper, the token refresh above,
+ * passes its relative path straight to fetch(), which resolves it happily.
+ *
+ * An absolute first argument ignores the base, so this is safe for both shapes.
+ */
+export function buildUrl(path: string, query?: RequestOptions['query']): string {
+  // window is absent during prerender; nothing fetches then, but the URL still
+  // has to parse.
+  const origin = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
   const url = new URL(
     path.startsWith('http') ? path : `${API_URL}${path.startsWith('/') ? path : `/${path}`}`,
+    origin,
   );
   if (query) {
     for (const [key, value] of Object.entries(query)) {

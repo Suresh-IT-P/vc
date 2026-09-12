@@ -42,6 +42,7 @@ import { connect, createServer as createProbeServer } from 'node:net';
 import { createServer, request as httpRequest } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadEnvIntoProcess } from './ensure-env.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -70,7 +71,11 @@ function spawnChild(name, argv, env) {
     // One half of the app dying means the app is down. Exit so the platform
     // restarts the container rather than leaving half of it serving errors.
     fail(`${name} exited (${signal ?? `code ${code}`}); shutting down`);
-    shutdown(code ?? 1);
+    // Always non-zero, whatever the child's own code was. A restart policy of
+    // ON_FAILURE reads exit 0 as "it meant to stop" and leaves the container
+    // down permanently, so a child that exits 0 unexpectedly would turn one
+    // uncaught exception into an outage that never recovers.
+    shutdown(code === 0 || code === null || code === undefined ? 1 : code);
   });
   child.on('error', (error) => {
     fail(`${name} failed to start: ${error.message}`);
@@ -143,7 +148,21 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
 
 if (!process.argv.includes('--skip-preflight')) {
   await new Promise((resolvePreflight) => {
-    const child = spawn(process.execPath, [resolve(here, 'preflight.mjs'), '--quiet'], {
+    /*
+     * --no-seed unless asked, because this is the production entry point.
+     *
+     * preflight seeds when the user table is empty, and `npm run build` already
+     * passes --no-seed while this path did not — so a production boot on an empty
+     * database created twelve demo accounts whose password the login page
+     * publishes. That is fine for the demo it was written for and wrong as a
+     * default for somebody's deployment, so it is now a choice: set
+     * SEED_DEMO_DATA=true to get the populated demo.
+     */
+    const seedDemoData = process.env.SEED_DEMO_DATA === 'true' || process.env.SEED_DEMO_DATA === '1';
+    if (seedDemoData) log('SEED_DEMO_DATA is set: an empty database will get the demo accounts');
+    const preflightArgs = [resolve(here, 'preflight.mjs'), '--quiet'];
+    if (!seedDemoData) preflightArgs.push('--no-seed');
+    const child = spawn(process.execPath, preflightArgs, {
       cwd: repoRoot,
       stdio: 'inherit',
       env: process.env,
@@ -157,6 +176,17 @@ if (!process.argv.includes('--skip-preflight')) {
     });
   });
 }
+
+/*
+ * Read .env into this process, now that preflight has guaranteed it exists.
+ *
+ * This script used to see only the real environment, so every check it makes
+ * about configuration was blind to the file the app actually runs on — the
+ * relative-DATABASE_URL warning below read an empty string and could never fire.
+ * Values already in the environment always win, so a platform's variables still
+ * outrank the file, and the children load the same file themselves regardless.
+ */
+loadEnvIntoProcess();
 
 /* -- 2. Choose loopback ports that cannot collide with the public one ------ */
 
@@ -279,10 +309,32 @@ if (behindTlsEdge && process.env.COOKIE_SECURE === undefined) {
   fail('Remove COOKIE_SECURE from your host variables to let it default to true.');
 }
 
+/*
+ * On a platform, a relative SQLite path is data you are going to lose.
+ *
+ * `file:./dev.db` resolves against apps/server/prisma/ — inside the container
+ * image. Everything works: preflight reports the database up to date,
+ * /health/ready answers database:up, the healthcheck passes. And every deploy
+ * and every restart begins again from the empty file baked into the build,
+ * taking all accounts, messages and call history with it. Nothing anywhere
+ * fails, which is precisely why this has to be said out loud.
+ */
+const databaseUrl = process.env.DATABASE_URL ?? '';
+if (behindTlsEdge && databaseUrl.startsWith('file:') && !databaseUrl.slice('file:'.length).startsWith('/')) {
+  fail(`DATABASE_URL is a relative path (${databaseUrl}), so the database lives inside`);
+  fail('the container. Every deploy and every restart erases all accounts, messages');
+  fail('and call history, with no error anywhere. Mount a volume and point');
+  fail('DATABASE_URL at it, e.g. file:/data/sonder.db.');
+}
+
 spawnChild('api', [resolve(repoRoot, 'apps/server/dist/index.js')], {
   NODE_ENV: 'production',
   PORT: String(API_PORT),
   HOST,
+  // Two proxies when a platform edge fronts this script, one when it stands
+  // alone. Undercounting makes req.ip the nearest proxy, which quietly turns
+  // per-client rate limiting into a single site-wide bucket.
+  TRUST_PROXY_HOPS: String(process.env.TRUST_PROXY_HOPS ?? (behindTlsEdge ? 2 : 1)),
   ...(corsOrigins.length > 0 ? { CORS_ORIGINS: corsOrigins.join(',') } : {}),
   ...(cookieSecure !== undefined ? { COOKIE_SECURE: cookieSecure } : {}),
 });
